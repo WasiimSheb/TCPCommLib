@@ -8,6 +8,7 @@
 /**
  * Structure representing a node in a linked list.
  */
+#include <stddef.h>
 typedef struct node 
 {
     int run;           // The run number.
