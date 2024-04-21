@@ -1,3 +1,4 @@
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,8 +9,8 @@
 #include <netinet/tcp.h>// TCP-specific socket options and constants
 #include <time.h> // Functions for manipulating time
 #include <stddef.h>
-#include "RUDP_API.h"
 
+#define BUFFER_SIZE 65536 // Define the buffer size for receiving data
 
 /**
  * Generates random data of the specified size.
@@ -42,61 +43,118 @@ char *create_random_data(unsigned int size){
      return buffer;   
 
 }
+int main(int argc, char *argv[]){
+     char buffer[BUFFER_SIZE] = {0};  // Buffer to store received data
+     
+       // Create a server address.
+    struct sockaddr_in server;
+    memset(&server, 0, sizeof(server));  // Initialize server address structure with zeros
 
-int main(int argc, char *argv[]) {
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s <IP address> <port>\n", argv[0]);
-        exit(EXIT_FAILURE);
+     // Generate some random data.
+     unsigned int size = 2097152; //2*1024^2= 2MB
+      char *message=create_random_data(size);// Generate random data to send
+      if (message == NULL)  // Check if random data generation failed
+    {
+        perror("generating data has failed");
+        return -1;  // Return -1 to indicate failure
     }
 
-    char *ip_address = argv[1]; // Use argv[1] for IP address
-    int port = atoi(argv[2]); // Use argv[2] for port
+    // Create a socket
+    int sock = socket(AF_INET, SOCK_STREAM, 0);  // Create a TCP socket
+    if (sock == -1)  // Check if socket creation failed
+    {
+        perror("socket(2) failed");
+        return -1;  // Return -1 to indicate failure
+    }
 
-    int sockfd = -1;
-    struct sockaddr_in server_addr;
-    char message[] = "Hello, server!";
+    // Need to fix the TCP_CONGESTION
 
-    while (1) {
-        // Create RUDP socket if not already created
-        if (sockfd < 0) {
-            sockfd = rudp_socket(port); // Use port 0 for dynamic port assignment
-            if (sockfd < 0) {
-                fprintf(stderr, "Failed to create RUDP socket\n");
-                exit(EXIT_FAILURE);
+    if (strcmp(argv[6], "cubic") == 0)  // Check if TCP congestion control algorithm is "cubic"
+    {
+        if (setsockopt(sock, IPPROTO_TCP, TCP_CONGESTION, "cubic", strlen("cubic")) != 0) 
+        {
+            perror("setsockopt() failed");
+            return -1;  // Return -1 to indicate failure
+        }
+    }
+     else if (strcmp(argv[6], "reno") == 0)  // Check if TCP congestion control algorithm is "reno"
+    {
+        if (setsockopt(sock, IPPROTO_TCP, TCP_CONGESTION, "reno", strlen("reno")) != 0) 
+        {
+            perror("setsockopt() failed");
+            return -1;  // Return -1 to indicate failure
+        }
+    }
+     else  // If TCP congestion control algorithm is neither "reno" nor "cubic"
+    {
+        return -1;  // Return -1 to indicate failure
+    }
+
+
+     // Set the server address.
+     server.sin_family = AF_INET;  // Set address family to IPv4  
+     server.sin_port = htons(atoi(argv[4]));  // Set port number from command-line argument
+
+      // Connect to the server.
+    if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0)  // Connect to server
+    {
+        perror("connecting() failed");
+        close(sock);
+        return -1;  // Return -1 to indicate failure
+    } 
+    printf("connected to Receiver...\n");
+
+// Initialize the option variable to 'yes' to enter the loop at least once
+    char option = 'y';
+    while (option == 'y')
+    {
+        // Send the  data
+        int bytes_sent = 0;
+        // Continue sending until all data is sent
+        while (bytes_sent < size)
+        {
+            // Send data to the server
+            int  bytes_sent_now = send(sock, message + bytes_sent, size - bytes_sent, 0);
+            if ( bytes_sent_now < 0) // Check if sending failed
+            {
+
+                perror("send(2)");
+                close(sock);
+                return 1;
             }
-
-            // Set up server address
-            memset(&server_addr, 0, sizeof(server_addr));
-            server_addr.sin_family = AF_INET;
-            server_addr.sin_addr.s_addr = inet_addr(ip_address);
-            server_addr.sin_port = htons(port);
+            bytes_sent +=  bytes_sent_now;// Update the total bytes sent counter
+            printf("Sent %d bytes\n", bytes_sent);
         }
+          // Send the "Finish" message to the server indicating that the data transfer is complete
+        char* finishMessage = "Finish\n";
+        send(sock, finishMessage, strlen(finishMessage), 0);
 
-        // Send data to server using RUDP
-        ssize_t bytes_sent = rudp_send(sockfd, server_addr, port, message, strlen(message));
-        if (bytes_sent < 0) {
-            fprintf(stderr, "Failed to send data using RUDP\n");
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
-
-        printf("Message sent to server: %s\n", message);
-
-        // Ask user if they want to send the message again
-        char choice;
+ // Prompt the user whether they want to send the message again
         printf("Do you want to send the message again? (y/n): ");
-        scanf(" %c", &choice);
-
-        if (choice != 'y' && choice != 'Y') {
-            break; // Exit loop if user chooses not to send again
-        }
+        scanf(" %c", &option);// Read the user's input
+         getchar();
     }
 
-    // Close RUDP socket
-    if (sockfd >= 0 && rudp_close(sockfd) < 0) {
-        fprintf(stderr, "Failed to close RUDP socket\n");
-        exit(EXIT_FAILURE);
+   // Send the "Exit" message to the server to terminate the connection
+    printf("Sending exit message to the server\n");
+    char* exitMessage = "Exit\n";
+    send(sock, exitMessage, strlen(exitMessage), 0);
+    printf("exit message was sent\n");
+
+    // Receive the message from the server.
+    int bytes_received = recv(sock, buffer, sizeof(buffer), 0);
+    if (bytes_received <= 0)// Check if receiving failed
+    {
+        perror("recv(2)");
+        close(sock);
+        return 1;
     }
 
-    return 0;
+// Ensure that the buffer is null-terminated to prevent potential segmentation faults (SEGFAULTs) when using the buffer as a string.
+    if (buffer[BUFFER_SIZE - 1] != '\0')
+        buffer[BUFFER_SIZE- 1] = '\0';
+
+    close(sock);// Close the socket with the server.
+    fprintf(stdout, "sender end.\n");
+    free(message);    return 0;
 }
